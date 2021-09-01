@@ -1,0 +1,216 @@
+########################################################################
+#                                                                      #
+# Numerical Relativity portion of the PiTP Computational Physics       #
+# Summer School, Princeton IAS, July 2009                              #
+#                                                                      #
+# Project 2: Solution of the Einstein-Klein-Gordon equations           #
+#            in spherical symmetry using maximal isotropic coordinates #
+#                                                                      #
+# See project handout for an explanation of the equations, variables   #
+# and boundary conditions                                              #
+#                                                                      #
+# This code implements the equations through "problem 5" of the        # 
+# handout                                                              #       
+#                                                                      #
+########################################################################
+
+########################################################################
+# Parameters                                                           #
+########################################################################
+
+# This is how to set the memory size
+system parameter int memsiz := 20000000
+
+########################################################################
+#                                                                      #
+# Initial pulse parameters:                                            #
+#                                                                      #
+# let phi(r,t=0) = A0 * exp(-(r-r0)^2/Delta^2)                         #
+#                                                                      #
+# then xi(r,t=0) = d(phi)/dr                                           #
+#                                                                      #
+# and choose PI(r,t=0) = xi(r,t=0)                                     #
+#                                                                      #
+# for an approximately ingoing wave at t=0 (assuming r0>>Delta)        #
+#                                                                      #
+# (in constrast to before we don't want to couple the metric into the  #
+# initial conditions here, as we will be solving for them at the       #
+# initial time as well)                                                #
+#                                                                      #
+########################################################################
+
+parameter float A0 := 1
+parameter float r0 := 10
+parameter float Delta := 1
+
+########################################################################
+# Kreiss-Oliger dissipation parameter ( 0 <= eps < 1)                  #
+########################################################################
+
+parameter float eps := 0.5
+
+########################################################################
+# Set to 1 to run on a fixed background                                #
+########################################################################
+
+parameter int fixed_background := 0
+
+########################################################################
+# The constant pi                                                      #
+########################################################################
+
+parameter float cpi := 3.141592653589793
+
+########################################################################
+# Parameters for solving the elliptics
+########################################################################
+
+parameter int elliptics_max_iter := 10
+parameter float elliptics_tol := 1.0e-5
+
+########################################################################
+# if free_psi:=0 then evolve psi via hamiltonian constraint            #
+########################################################################
+parameter int free_psi := 0
+
+########################################################################
+# Coordinate definition                                                # 
+########################################################################
+rect coordinates t,r
+
+parameter float rmin := 0.0
+parameter float rmax := 20.0
+
+uniform rect grid g1 [1:Nr] {rmin:rmax}
+
+########################################################################
+# Use a 2-time level, Crank-Nicholson style differencing scheme        #
+########################################################################
+operator AVG(f,t) := (<1>f[0]+<0>f[0])/2
+operator FW(f,t) := (<1>f[0])
+operator D_LF(f,r) := (<0>f[1] - <0>f[-1])/(2*dr)
+operator D_FW(f,r) := (-3*<0>f[0]+4*<0>f[1]-<0>f[2])/(2*dr)
+operator D_BW(f,r) := (3*<0>f[0]-4*<0>f[-1]+<0>f[-2])/(2*dr)
+
+operator D_CN(f,t) := (<1>f[0] - <0>f[0])/(dt)
+operator D_CN(f,r) := AVG(D_LF(f,r),t)
+operator D_CNFW(f,r) := AVG(D_FW(f,r),t)
+operator D_CNBW(f,r) := AVG(D_BW(f,r),t)
+
+########################################################################
+# Kreiss-Oliger dissipation operator                                   #
+########################################################################
+operator DISS_KO(f,t) := -(eps/(16*dt))* (<0>f[-2]-4*<0>f[-1]+6*<0>f[0]-4*<0>f[1]+<0>f[2])
+operator DISS_KO_ODD_FW1(f,t) := -(eps/(16*dt))* (-<0>f[0]-4*<0>f[-1]+6*<0>f[0]-4*<0>f[1]+<0>f[2])
+operator DISS_KO_EVEN_FW1(f,t) := -(eps/(16*dt))* (<0>f[0]-4*<0>f[-1]+6*<0>f[0]-4*<0>f[1]+<0>f[2])
+
+########################################################################
+# Variables                                                            #
+########################################################################
+float PI    on g1 at 0,1 { out_gf := 1 }
+float phi   on g1 at 0,1 { out_gf := 1 }
+float xi    on g1 at 0,1 { out_gf := 1 }
+float psi   on g1 at 0,1 { out_gf := 1 }
+float beta  on g1 at 0,1 { out_gf := 1 }
+float alpha on g1 at 0,1 { out_gf := 1 }
+float psi_evo on g1 at 0,1 { out_gf := 1 }
+float mass on g1 { out_gf := 1 }
+
+########################################################################
+# Initial conditions                                                   #
+########################################################################
+
+initialize xi 
+{
+   [1:Nr] := -2*(r-r0)/Delta^2 * A0*exp(-(r-r0)^2/Delta^2);
+}
+
+initialize PI 
+{
+   [1:Nr] := -2*(r-r0)/Delta^2 * A0*exp(-(r-r0)^2/Delta^2);
+}
+
+initialize phi
+{
+   [1:Nr] := A0*exp(-(r-r0)^2/Delta^2);
+}
+
+########################################################################
+# Residuals (equations of motion)                                      #
+########################################################################
+
+evaluate residual xi
+{
+   [1:1]       := <1>xi[0]=0;
+   [2:2]       := D_CN(xi,t) = D_CN(alpha*PI/psi^2 + beta*xi,r) + DISS_KO_ODD_FW1(xi,t);
+   [3:Nr-2]    := D_CN(xi,t) = D_CN(alpha*PI/psi^2 + beta*xi,r) + DISS_KO(xi,t);
+   [Nr-1:Nr-1] := D_CN(xi,t) = D_CN(alpha*PI/psi^2 + beta*xi,r);
+   [Nr:Nr]     := D_CN(xi,t) + AVG(xi/r+D_BW(xi,r),t) = 0;
+}
+
+evaluate residual PI
+{
+   [1:1]       := D_CNFW(PI,r) = 0;
+   [2:2]       := D_CN(PI,t) = 
+                    AVG(1/r^2/psi^4,t)*D_CN(r^2*psi^4*(beta*PI+alpha*xi/psi^2),r)  
+                  - AVG(2*PI/3,t)*(D_CN(beta,r) - AVG(beta/r,t)*(1-AVG(3/psi^2,t)*D_CN(r*psi^2,r)))
+                  + DISS_KO_EVEN_FW1(PI,t);
+   [3:Nr-2]    := D_CN(PI,t) = 
+                    AVG(1/r^2/psi^4,t)*D_CN(r^2*psi^4*(beta*PI+alpha*xi/psi^2),r)  
+                  - AVG(2*PI/3,t)*(D_CN(beta,r) - AVG(beta/r,t)*(1-AVG(3/psi^2,t)*D_CN(r*psi^2,r)))
+                  + DISS_KO(PI,t);
+   [Nr-1:Nr-1] := D_CN(PI,t) = 
+                    AVG(1/r^2/psi^4,t)*D_CN(r^2*psi^4*(beta*PI+alpha*xi/psi^2),r)  
+                  - AVG(2*PI/3,t)*(D_CN(beta,r) - AVG(beta/r,t)*(1-AVG(3/psi^2,t)*D_CN(r*psi^2,r)));
+   [Nr:Nr]     := D_CN(PI,t) + AVG(PI/r+D_BW(PI,r),t) = 0;
+}
+
+residual mass
+{
+   [2:Nr-1]:= <0>mass[0] = FW( r*psi^6/18/alpha^2*(D_LF(beta,r)*r-beta)^2
+                              -2*r^2*D_LF(psi,r)*D_LF(r*psi,r),t);
+   [1:1]   := <0>mass[0] = <0>mass[1];
+   [Nr:Nr] := <0>mass[0] = <0>mass[-1];
+}
+
+residual phi
+{
+   [1:Nr]:= D_CN(phi,t) = AVG(alpha*PI/psi^2+beta*xi,t);
+}
+
+evaluate residual psi_evo
+{
+   [1:1]      := D_CNFW(psi_evo,r)=0;
+   [2:Nr-1]   := D_CN(psi_evo,t) = AVG(beta,t)*(AVG(psi/3/r,t)+D_CN(psi,r))+AVG(psi/6,t)*D_CN(beta,r)
+                 + DISS_KO_EVEN_FW1(psi_evo,t);
+   [3:Nr-2]   := D_CN(psi_evo,t) = AVG(beta,t)*(AVG(psi/3/r,t)+D_CN(psi,r))+AVG(psi/6,t)*D_CN(beta,r)
+               + DISS_KO(psi_evo,t);
+   [Nr-1:Nr-1]:= D_CN(psi_evo,t) = AVG(beta,t)*(AVG(psi/3/r,t)+D_CN(psi,r))+AVG(psi/6,t)*D_CN(beta,r);
+   [Nr:Nr]    := FW(D_BW(psi_evo,r)+(psi_evo-1)/r,t) = 0;
+}
+
+########################################################################
+# Define functions to initialize (note order)                          #
+########################################################################
+
+auto initialize PI,xi,phi
+
+elliptics_init.inc init_e initialize alpha,beta,psi,mass,psi_evo
+   header alpha,beta,psi,xi,PI,mass,psi_evo,
+          free_psi,fixed_background,r,Nr,elliptics_max_iter,
+          elliptics_tol,cpi,dr,t
+
+########################################################################
+# Define order to evolve, and solve via iteration                      #
+########################################################################
+
+auto update xi,PI,psi_evo,phi
+
+elliptics.inc evolve_e updates alpha,beta,psi
+   header alpha,beta,psi,xi,PI,mass,psi_evo,
+          free_psi,fixed_background,r,Nr,elliptics_max_iter,
+          elliptics_tol,cpi,dr,t
+
+auto update mass
+
+looper iterative
